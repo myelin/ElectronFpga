@@ -3,9 +3,7 @@ from __future__ import print_function
 import os, sys
 import program_flash
 
-if sys.version_info < (3, 0):
-    print("WARNING: This script is no longer tested under Python 2.  "
-          "Running under Python 3 is highly recommended.")
+assert sys.version_info.major >= 3, "Requires Python 3+"
 
 HERE = os.path.abspath(os.path.split(sys.argv[0])[0])
 

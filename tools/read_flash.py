@@ -1,5 +1,3 @@
-from __future__ import print_function
-
 # Copyright 2017 Google Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,10 +24,12 @@ import time
 
 import mcu_port
 
+assert sys.version_info.major >= 3, "Requires Python 3+"
+
 usb_block_size = 63
 
 def read_until(ser, match):
-    resp = ''
+    resp = b''
     while True:
         r = ser.read(1024)
         if r:
@@ -44,27 +44,27 @@ def read_until(ser, match):
 def download():
     with mcu_port.Port() as ser:
         print("\n* Port open.  Giving it a kick, and waiting for OK.")
-        ser.write("\n")
-        r = read_until(ser, "OK")
+        ser.write(b"\n")
+        r = read_until(ser, b"OK")
 
         read_from = 0
         read_length = 16384 * 16
 
-        ser.write("r%d+%d\n" % (read_from, read_length))
-        resp = ''
+        ser.write(b"r%d+%d\n" % (read_from, read_length))
+        resp = b''
         while True:
             r = ser.read(1024)
             if r:
                 resp += r
                 print(repr(r))
-                p = resp.find("DATA:")
+                p = resp.find(b"DATA:")
                 if p != -1 and len(resp) >= p+5 + read_length:
                     print("got %d bytes" % read_length)
                     open("download.rom", "wb").write(resp[p+5:p+5+read_length])
                     break
             time.sleep(0.1)
 
-        ser.write("x")
+        ser.write(b"x")
         time.sleep(0.5)
         print(ser.read(1024))
 

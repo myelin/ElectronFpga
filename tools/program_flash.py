@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-from __future__ import print_function
-
 # Copyright 2017 Google Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,9 +27,7 @@ import time
 
 import mcu_port
 
-if sys.version_info < (3, 0):
-    print("WARNING: This script is no longer tested under Python 2.  "
-          "Running under Python 3 is highly recommended.")
+assert sys.version_info.major >= 3, "Requires Python 3+"
 
 # Arduino USB serial ports seem to crash out if you send more than 63 (or sometimes 127)
 # bytes at a time.  The ASF version works fine with full blocks.
