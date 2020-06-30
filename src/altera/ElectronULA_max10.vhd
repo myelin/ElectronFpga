@@ -328,13 +328,20 @@ signal flash_addr        : std_logic_vector(23 downto 0);
 signal flash_data_out    : std_logic_vector(7 downto 0) := x"FF";
 signal flash_ready       : std_logic;
 signal flash_reset       : std_logic := '0';
+signal flash_controller_reset : std_logic;
 signal flash_read        : std_logic;
+signal flash_controller_read : std_logic;
+signal flash_passthrough : std_logic;
+signal flash_passthrough_nCE : std_logic;
+signal flash_passthrough_SCK : std_logic;
+signal flash_passthrough_MOSI : std_logic;
 
 signal sdram_enable        : std_logic;         -- SDRAM selected by CPU
 signal sdram_clken         : std_logic := '0';  -- 48MHz clock enable
 signal sdram_address       : std_logic_vector(23 downto 0);
 signal sdram_ready         : std_logic;
 signal sdram_done          : std_logic;
+signal sdram_data_in       : std_logic_vector(15 downto 0);
 signal sdram_data_out      : std_logic_vector(15 downto 0) := x"8442";
 --signal sdram_init          : std_logic := '1';  -- Power on reset for sdram
 signal sdram_access        : std_logic := '0';
@@ -699,7 +706,7 @@ begin
             cpu_clken_dly <= cpu_clken_from_ula;
         end if;
     end process;
-    cpu_clken <= cpu_clken_dly when AdvanceExternalClock else cpu_clken_from_ula;
+    cpu_clken <= cpu_clken_dly when AdvanceExternalClock = true else cpu_clken_from_ula;
 
     -- Blink CAPS at 1 Hz
     --blink_caps : process(clock_16)
@@ -718,7 +725,7 @@ begin
 
     -- CPU data bus and RnW signal
     data_in <= data;
-    RnW <= cpu_RnW_out when InternalCPU else RnW_in;
+    RnW <= cpu_RnW_out when InternalCPU = true else RnW_in;
 
     -- '1' when the CPU is reading from a device on the ULA PCB
     bus_write_from_internal_device <= '1' when RnW = '1' and (
@@ -742,7 +749,7 @@ begin
         -- outwards when something local is writing to the bus
         '0' when bus_write_from_internal_device = '1' else
         -- inwards when the internal CPU is reading, outwards when it is writing
-        RnW when InternalCPU else
+        RnW when InternalCPU = true else
         -- inwards when external CPU is writing
         '1' when RnW = '0' else
         -- inwards during boundary scan
@@ -758,7 +765,7 @@ begin
             sdram_data_out(15 downto 8) when RnW = '1' and sdram_enable = '1' and addr(0) = '1' else
             sdram_data_out(7 downto 0) when RnW = '1' and sdram_enable = '1' and addr(0) = '0' else
             usb_serial_data when RnW = '1' and usb_serial_enable = '1' else
-            cpu_data_out   when RnW = '0' and InternalCPU else
+            cpu_data_out   when RnW = '0' and InternalCPU = true else
             "ZZZZZZZZ";  -- ext CPU, RnW = '0' or boundary_scan = '1'
 
 
@@ -780,7 +787,7 @@ begin
 -- Internal CPU (optional)
 --------------------------------------------------------
 
-    GenCPU: if InternalCPU generate
+    GenCPU: if InternalCPU = true generate
         T65core : entity work.T65
         port map (
             Mode            => "00",
@@ -811,7 +818,7 @@ begin
 -- Audio DAC
 --------------------------------------------------------
 
-    GenDAC: if IncludeAudio generate
+    GenDAC: if IncludeAudio = true generate
 
         -- Simple I2S implementation for 1-bit mono output to the WM8524 DAC
 
@@ -850,7 +857,7 @@ begin
 
     end generate;
 
-    NoGenDAC: if not IncludeAudio generate
+    NoGenDAC: if IncludeAudio = false generate
 
         -- Standby mode
         dac_bclk <= clock_16;
@@ -883,7 +890,7 @@ begin
     -- Right now this maps to the first 16 x 16kB = 256kB of flash.
 
     flash_addr <= char_rom_start + char_rom_addr(11 downto 0) when char_rom_read = '1'
-        else mgc_flash_addr when IncludeMGC and (rom_latch = 2 or rom_latch = 3)
+        else mgc_flash_addr when IncludeMGC = true and (rom_latch = 2 or rom_latch = 3)
         else "000000" & rom_latch & addr(13 downto 0);
 
     mgc_flash_addr <= "01" & (not mgc_high_bank) & mgc_bank & addr(13 downto 0) when mgc_use_both_banks = '1'
@@ -893,7 +900,7 @@ begin
 -- SDRAM
 --------------------------------------------------------
 
-    fast_sdram_clock : if FastSDRAM generate
+    fast_sdram_clock : if FastSDRAM = true generate
         sdram_CLK <= clock_96_sdram;
     end generate;
 
@@ -909,7 +916,7 @@ begin
                 sdram_refreshing <= '0';
             end if;
 
-            if FastSDRAM then
+            if FastSDRAM = true then
                 -- SDRAM controller is active on every cycle when clocking at 96MHz
                 sdram_clken <= '1';
             else
@@ -934,6 +941,7 @@ begin
         end if;
     end process;
 
+    sdram_data_in <= data & data;
     sdram_controller : sdram_simple PORT MAP (
         -- Host side
         clk_100m0_i => clock_96,
@@ -943,7 +951,7 @@ begin
         rw_i        => sdram_access,
         we_i        => sdram_writing,
         addr_i      => sdram_address,
-        data_i      => data & data,
+        data_i      => sdram_data_in,
         ub_i        => sdram_high_bank_en,
         lb_i        => sdram_low_bank_en,
         ready_o     => sdram_ready,
@@ -1041,20 +1049,26 @@ begin
 
     -- See above for bank enable logic
 
+    flash_controller_reset <= memory_reset_96 or flash_reset;
+    flash_controller_read <= char_rom_read or (start_read_96 and flash_enable);  -- Read cycle trigger
+    flash_passthrough <= mcu_flash_spi_clocking or mcu_flash_passthrough;
+    flash_passthrough_nCE <= not mcu_flash_spi_clocking;
+    flash_passthrough_SCK <= mcu_SCK_sync(0);
+    flash_passthrough_MOSI <= mcu_MOSI_sync(0);
     flash_controller : qpi_flash
     port map (
         clk => clock_96,
         ready => flash_ready,
-        reset => memory_reset_96 or flash_reset,
-        read => char_rom_read or (start_read_96 and flash_enable),  -- Read cycle trigger
+        reset => flash_controller_reset,
+        read => flash_controller_read,
         addr => flash_addr,
         data_out => flash_data_out,
         -- Passthrough: when active (passthrough = '1'), IO1/2/3 are inputs with
         -- a weak pullup, and nCE/SCK/IO0 are passed through (registered on clock_96).
-        passthrough => mcu_flash_spi_clocking or mcu_flash_passthrough,
-        passthrough_nCE => not mcu_flash_spi_clocking,
-        passthrough_SCK => mcu_SCK_sync(0),
-        passthrough_MOSI => mcu_MOSI_sync(0),
+        passthrough => flash_passthrough,
+        passthrough_nCE => flash_passthrough_nCE,
+        passthrough_SCK => flash_passthrough_SCK,
+        passthrough_MOSI => flash_passthrough_MOSI,
         -- External pins
         flash_nCE => flash_nCE,
         flash_SCK => flash_SCK,
@@ -1064,7 +1078,7 @@ begin
         flash_IO3 => flash_IO3
     );
 
-    gen_mgc : if IncludeMGC generate
+    gen_mgc : if IncludeMGC = true generate
         process (clock_96)
         begin
             if rising_edge(clock_96) then
@@ -1087,7 +1101,7 @@ begin
         end process;
     end generate;
 
-    load_mode7_char_rom : if IncludeMode7 generate
+    load_mode7_char_rom : if IncludeMode7 = true generate
         -- On startup, load SAA5050 character ROM from QPI flash.
         char_rom_loaded <= char_rom_addr(char_rom_addr'high);
         process (clock_96)
@@ -1237,7 +1251,7 @@ begin
             if sdram_refresh_counter /= 31 then
                 sdram_refresh_counter <= sdram_refresh_counter + 1;
             end if;
-            If InternalCPU then
+            If InternalCPU = true then
                 if cpu_clken_96_sync(2) = '1' and cpu_clken_96_sync(1) = '0' then
                     -- falling edge of cpu_clken_16_sync; T65 clock should be all done by now
                     if RnW = '0' then
