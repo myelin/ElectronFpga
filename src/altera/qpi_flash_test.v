@@ -88,6 +88,37 @@ module qpi_flash_test;
     .flash_IO3(flash_IO3)
   );
 
+  task expectout;
+    input [7:0] expected_byte;
+
+    reg [7:0] in_byte;
+
+    begin
+      @(negedge flash_SCK);
+      in_byte[7:4] = {flash_IO3, flash_IO2, flash_IO1, flash_IO0};
+      @(negedge flash_SCK);
+      in_byte[3:0] = {flash_IO3, flash_IO2, flash_IO1, flash_IO0};
+      $display("Controller output %02x (expected %02x)", in_byte, expected_byte);
+      if (in_byte != expected_byte) begin
+        $display("FAIL");
+        $finish;
+      end
+    end
+  endtask
+
+  // simulate byte sent in from flash to fpga
+  task inbyte;
+    input [7:0] byte;
+
+    begin
+      output_IO = byte[7:4];
+      @(negedge flash_SCK);
+      output_IO = byte[3:0];
+      @(negedge flash_SCK);
+      output_IO = 4'bz;
+    end
+  endtask
+
   // clock driver
   initial begin
     clk = 1'b0;
@@ -108,33 +139,33 @@ module qpi_flash_test;
 
   always @(negedge flash_nCE) begin
     $display("falling edge on flash_nCE");
-    shift_count <= 0;
+    shift_count = 0;
   end
 
   always @(posedge flash_SCK) begin
     if (dut.qpi_mode == 1) begin
-      spi_shift <= {spi_shift[`SHIFT_HIGH-4:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
+      spi_shift = {spi_shift[`SHIFT_HIGH-4:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
       $display("rising QPI edge with output nybble %x", {flash_IO3, flash_IO2, flash_IO1, flash_IO0});
-      shift_count <= shift_count + 4;
+      shift_count = shift_count + 4;
     end else begin
-      spi_shift <= {spi_shift[`SHIFT_HIGH-1:0], flash_IO0};
+      spi_shift = {spi_shift[`SHIFT_HIGH-1:0], flash_IO0};
       // $display("rising SPI edge with MOSI %x", flash_IO0);
-      shift_count <= shift_count + 1;
+      shift_count = shift_count + 1;
     end
   end
 
   always @(negedge flash_SCK) begin
       if (shift_count == 8) begin
         $display("-> output byte %x", spi_shift[7:0]);
-        shift_count <= 0;
+        shift_count = 0;
       end
   end
 
   always @(posedge clk) begin
     if (ready == 1 || reset_wait_count > 10000) begin
-      reset_wait_finished <= 1;
+      reset_wait_finished = 1;
     end else if (reset_wait_finished == 0) begin
-      reset_wait_count <= reset_wait_count + 1;
+      reset_wait_count = reset_wait_count + 1;
     end
   end
 
@@ -142,45 +173,32 @@ module qpi_flash_test;
 
     $display("running qpi_flash_test");
 
-    $dumpfile("qpi_flash_test.vcd");
+    $dumpfile("qpi_flash_test.lxt2");
     $dumpvars(0, qpi_flash_test);
 
     $display("start");
-    reset <= 1;
+    reset = 1;
     repeat(10) @(posedge clk);
-    reset <= 0;
-    waiting_for_reset <= 1;
-    reset_wait_count <= 0;
-    reset_wait_finished <= 0;
+    reset = 0;
+    waiting_for_reset = 1;
+    reset_wait_count = 0;
+    reset_wait_finished = 0;
     @(posedge reset_wait_finished);
 
     `assert(ready == 1'b1, "FAIL: device not ready");
 
     $display("\n\nReset successful; trying a read (0 alignment)");
-    addr <= 24'h123454;
-    read <= 1;
+    addr = 24'h123454;
+    read = 1;
     @(posedge clk);
-    read <= 0;
+    #1 read = 0;
     // wait for 4 qpi bytes
-    repeat(8) @(negedge flash_SCK);
+    expectout(8'h12);
+    expectout(8'h34);
+    expectout(8'h54);
+    expectout(8'h20);
     // now push some data
-    output_IO <= 4'hA;
-    @(negedge flash_SCK);
-    output_IO <= 4'hB;
-    @(negedge flash_SCK);
-    // output_IO <= 4'hC;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'hD;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'hE;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'hF;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h1;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h2;
-    // @(negedge flash_SCK);
-    output_IO <= 4'bz;
+    inbyte(8'hAB);
     // wait for end of txn
     @(posedge flash_nCE);
     $display("Read transaction finished, by the looks of things; shifter == %x", dut.shifter);
