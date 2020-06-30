@@ -190,6 +190,8 @@ architecture behavioral of ElectronULA is
   signal caps_int       : std_logic;
   signal motor_int      : std_logic;
 
+  signal data_in_5_downto_3 : std_logic_vector(2 downto 0);
+
   -- Supports changing the jumpers
   signal mode_init_copy : std_logic_vector(1 downto 0);
 
@@ -304,6 +306,9 @@ architecture behavioral of ElectronULA is
 
   signal ula_irq_n         : std_logic;
 
+  signal ram_20k_addra     : std_logic_vector(14 downto 0);
+  signal ram_20k_addrb     : std_logic_vector(14 downto 0);
+
 -- Helper function to cast an std_logic value to an integer
 function sl2int (x: std_logic) return integer is
 begin
@@ -328,7 +333,7 @@ begin
     -- mode 10 - SVGA  @ 50Hz
     -- mode 11 - SVGA  @ 60Hz
 
-    gen_clk_mux : if UseClockMux generate
+    gen_clk_mux : if UseClockMux = true generate
 
         -- A simple clock mux causes lots of warnings from the Xilinx tool,
         -- but is OK with Quartus.
@@ -340,7 +345,7 @@ begin
     end generate;
 
 
-    gen_clk_with_flops : if not UseClockMux generate
+    gen_clk_with_flops : if UseClockMux = false generate
 
         -- Regenerate the clock using edge triggered flip flops on Xilinx.
 
@@ -393,22 +398,22 @@ begin
         clk_40M00_c <= clk_40M00_a xor clk_40M00_b;
 
 
-        clk_video    <= clk_40M00_c when mode = "11" and IncludeVGA else
-                        clk_33M33_c when mode = "10" and IncludeVGA else
+        clk_video    <= clk_40M00_c when mode = "11" and IncludeVGA = true else
+                        clk_33M33_c when mode = "10" and IncludeVGA = true else
                         clk_16M00_c;
 
     end generate;
 
-    hsync_start  <= std_logic_vector(to_unsigned(759, 11)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(759, 11)) when mode = "10" and IncludeVGA else
+    hsync_start  <= std_logic_vector(to_unsigned(759, 11)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(759, 11)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned(768, 11));
 
-    hsync_end    <= std_logic_vector(to_unsigned(887, 11)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(887, 11)) when mode = "10" and IncludeVGA else
+    hsync_end    <= std_logic_vector(to_unsigned(887, 11)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(887, 11)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned(832, 11));
 
-    h_total      <= std_logic_vector(to_unsigned(1055, 11)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(1055, 11)) when mode = "10" and IncludeVGA else
+    h_total      <= std_logic_vector(to_unsigned(1055, 11)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(1055, 11)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned(1023, 11));
 
     h_active     <= std_logic_vector(to_unsigned(640, 11));
@@ -419,42 +424,42 @@ begin
     -- as it doesn't affect the timing of the display or RTC
     -- interrupts. I'm happy to rever this is anyone complains!
 
-    vsync_start  <= std_logic_vector(to_unsigned(556, 10)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(556, 10)) when mode = "10" and IncludeVGA else
+    vsync_start  <= std_logic_vector(to_unsigned(556, 10)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(556, 10)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned(274, 10));
 
-    vsync_end    <= std_logic_vector(to_unsigned(560, 10)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(560, 10)) when mode = "10" and IncludeVGA else
+    vsync_end    <= std_logic_vector(to_unsigned(560, 10)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(560, 10)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned(276, 10)) when field = '0'                else
                     std_logic_vector(to_unsigned(277, 10));
 
-    v_total      <= std_logic_vector(to_unsigned(627, 10)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(627, 10)) when mode = "10" and IncludeVGA else
+    v_total      <= std_logic_vector(to_unsigned(627, 10)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(627, 10)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned(311, 10)) when field = '0'                else
                     std_logic_vector(to_unsigned(312, 10));
 
-    v_active_gph <= std_logic_vector(to_unsigned(512, 10)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(512, 10)) when mode = "10" and IncludeVGA else
+    v_active_gph <= std_logic_vector(to_unsigned(512, 10)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(512, 10)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned(256, 10));
 
-    v_active_txt <= std_logic_vector(to_unsigned(500, 10)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(500, 10)) when mode = "10" and IncludeVGA else
+    v_active_txt <= std_logic_vector(to_unsigned(500, 10)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(500, 10)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned(250, 10));
 
-    v_disp_gph   <= std_logic_vector(to_unsigned(513, 10)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(513, 10)) when mode = "10" and IncludeVGA else
+    v_disp_gph   <= std_logic_vector(to_unsigned(513, 10)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(513, 10)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned(255, 10));
 
-    v_disp_txt   <= std_logic_vector(to_unsigned(501, 10)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(501, 10)) when mode = "10" and IncludeVGA else
+    v_disp_txt   <= std_logic_vector(to_unsigned(501, 10)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(501, 10)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned(249, 10));
 
-    v_rtc        <= std_logic_vector(to_unsigned(201, 10)) when mode = "11" and IncludeVGA else
-                    std_logic_vector(to_unsigned(201, 10)) when mode = "10" and IncludeVGA else
+    v_rtc        <= std_logic_vector(to_unsigned(201, 10)) when mode = "11" and IncludeVGA = true else
+                    std_logic_vector(to_unsigned(201, 10)) when mode = "10" and IncludeVGA = true else
                     std_logic_vector(to_unsigned( 99, 10));
 
     -- All of main memory (0x0000-0x7fff) is dual port RAM in the ULA
-    ram_32k_gen: if Include32KRAM generate
+    ram_32k_gen: if Include32KRAM = true generate
         ram_32k : entity work.RAM_32K_DualPort port map(
             -- Port A is the 6502 port
             clka  => clk_16M00,
@@ -473,19 +478,21 @@ begin
     end generate;
 
     -- Just screen memory (0x3000-0x7fff) is dual port RAM in the ULA
-    ram_20k_gen: if not Include32KRAM generate
+    ram_20k_gen: if Include32KRAM = false generate
         -- xor'ing with 7000 maps 3000-7fff into range 0000-4fff
+        ram_20k_addra <= addr(14 downto 0) xor "111000000000000";
+        ram_20k_addrb <= screen_addr xor "111000000000000";
         ram_20k : entity work.RAM_20K_DualPort port map(
             -- Port A is the 6502 port
             clka  => clk_16M00,
             wea   => ram_we,
-            addra => addr(14 downto 0) xor "111000000000000",
+            addra => ram_20k_addra,
             dina  => data_in,
             douta => ram_data,
             -- Port B is the VGA Port
             clkb  => clk_video,
             web   => '0',
-            addrb => screen_addr xor "111000000000000",
+            addrb => ram_20k_addrb,
             dinb  => x"00",
             doutb => screen_data
             );
@@ -508,17 +515,17 @@ begin
                 "0000" & (kbd xor "1111") when kbd_access = '1' else
                 isr_data                  when addr(15 downto 8) = x"FE" and addr(3 downto 0) = x"0" else
                 data_shift                when addr(15 downto 8) = x"FE" and addr(3 downto 0) = x"4" else
-                crtc_do                   when crtc_enable = '1' and IncludeJafaMode7 else
-                status_do                 when status_enable = '1' and IncludeJafaMode7 else
-                mc6522_data_r             when mc6522_enable = '1' and IncludeMMC else
+                crtc_do                   when crtc_enable = '1' and IncludeJafaMode7 = true else
+                status_do                 when status_enable = '1' and IncludeJafaMode7 = true else
+                mc6522_data_r             when mc6522_enable = '1' and IncludeMMC = true else
                 x"F1"; -- todo FIXEME
 
     data_en  <= '1'                       when addr(15) = '0' else
                 '1'                       when kbd_access = '1' else
                 '1'                       when addr(15 downto 8) = x"FE" else
-                '1'                       when crtc_enable = '1' and IncludeJafaMode7 else
-                '1'                       when status_enable = '1' and IncludeJafaMode7 else
-                '1'                       when mc6522_enable = '1' and IncludeMMC else
+                '1'                       when crtc_enable = '1' and IncludeJafaMode7 = true else
+                '1'                       when status_enable = '1' and IncludeJafaMode7 = true else
+                '1'                       when mc6522_enable = '1' and IncludeMMC = true else
                 '0';
 
     -- Register FEx0 is the Interrupt Status Register (Read Only)
@@ -580,7 +587,7 @@ begin
                 -- Synchronize the rtc interrupt signal from the VGA clock domain
                 rtc_intr1 <= rtc_intr;
                 rtc_intr2 <= rtc_intr1;
-                if mode = "11" and IncludeVGA then
+                if mode = "11" and IncludeVGA = true then
                     -- For 60Hz frame rates we must synthesise a the 50Hz real time clock interrupt
                     -- In theory the counter limit should be 319999, but there are additional
                     -- rtc ticks if not rtc interrupt is received between two display interrupts
@@ -760,11 +767,11 @@ begin
                         mode <= "01";
                     end if;
                     -- Detect "3" being pressed: SVGA @ 50 Hz (33 MHz clock)
-                    if (addr = x"bbff" and page_enable = '1' and page(2 downto 1) = "00" and ctrl_caps = '1' and kbd(0) = '0' and IncludeVGA) then
+                    if (addr = x"bbff" and page_enable = '1' and page(2 downto 1) = "00" and ctrl_caps = '1' and kbd(0) = '0' and IncludeVGA = true) then
                         mode <= "10";
                     end if;
                     -- Detect "4" being pressed: SVGA @ 60 Hz (40 MHz clock)
-                    if (addr = x"bdff" and page_enable = '1' and page(2 downto 1) = "00" and ctrl_caps = '1' and kbd(0) = '0' and IncludeVGA) then
+                    if (addr = x"bdff" and page_enable = '1' and page(2 downto 1) = "00" and ctrl_caps = '1' and kbd(0) = '0' and IncludeVGA = true) then
                         mode <= "11";
                     end if;
                     -- Detect "5" being pressed: 1MHz
@@ -836,7 +843,8 @@ begin
                             when x"7" =>
                                 caps_int     <= data_in(7);
                                 motor_int    <= data_in(6);
-                                case (data_in(5 downto 3)) is
+                                data_in_5_downto_3 <= data_in(5 downto 3);
+                                case data_in_5_downto_3 is
                                 when "000" =>
                                     mode_base    <= "0110"; -- 0x3000
                                     mode_bpp     <= "00";
@@ -1056,7 +1064,7 @@ begin
                     end if;
                 end if;
                 -- Implement Color Palette
-                case (pixel) is
+                case pixel is
                 when "0000" =>
                     red_int   <= (others => palette(1)(0));
                     green_int <= (others => palette(1)(4));
@@ -1220,7 +1228,7 @@ begin
             clken_counter <= clken_counter + 1;
 
             -- Logic to supress cpu cycles
-            case (turbo_sync) is
+            case turbo_sync is
                 when "00" =>
                     -- 1MHz No Contention
                     --    RAM accesses 1MHz
@@ -1315,7 +1323,7 @@ begin
             end case;
 
             -- Generate clock enables for VIA one cycle before cpu_clken
-            if turbo_sync(1) = '0' or LimitIOSpeed then
+            if turbo_sync(1) = '0' or LimitIOSpeed = true then
                 -- 1MHz
                 via1_clken <= clken_counter(3) and clken_counter(2) and clken_counter(1) and not clken_counter(0);
                 via4_clken <=                                           clken_counter(1) and not clken_counter(0);
@@ -1354,7 +1362,7 @@ begin
 -- Optional MMC Filing System
 --------------------------------------------------------
 
-    MMCIncluded: if IncludeMMC generate
+    MMCIncluded: if IncludeMMC = true generate
 
         mc6522_enable  <= '1' when addr(15 downto 4) = x"fcb" else '0';
 
@@ -1421,7 +1429,7 @@ begin
 
     end generate;
 
-    MMCNotIncluded: if not IncludeMMC generate
+    MMCNotIncluded: if IncludeMMC = false generate
 
         IRQ_n <= ula_irq_n;
 
@@ -1431,7 +1439,7 @@ begin
 -- Optional Jafa Mk1 Compatible Mode 7 Implementation
 --------------------------------------------------------
 
-    JafaIncluded: if IncludeJafaMode7 generate
+    JafaIncluded: if IncludeJafaMode7 = true generate
         -- FC1C - Write address register
         -- FC1D - Write data register
         -- FC1E - Read status register - only bit 5 (vsync) is implemented
@@ -1455,13 +1463,13 @@ begin
             end if;
         end process;
 
-        using_ext_ttxt_clock : if UseTTxtClock generate
+        using_ext_ttxt_clock : if UseTTxtClock = true generate
             -- Use external 96 MHz clock / 12 MHz enable
             ttxt_clock <= clk_ttxt;
             ttxt_clken <= clken_ttxt_12M;
         end generate;
 
-        using_24mhz_ttxt_clock : if not UseTTxtClock generate
+        using_24mhz_ttxt_clock : if not UseTTxtClock = true generate
             -- Use 24 MHz clock and generate 12 MHz enable
             ttxt_clock <= clk_24M00;
             process (clk_24M00)
@@ -1544,7 +1552,7 @@ begin
         mode7_enable <= crtc_ma(13);
     end generate;
 
-    JafaAndVGAIncluded: if IncludeJafaMode7 and IncludeVGA generate
+    JafaAndVGAIncluded: if IncludeJafaMode7 = true and IncludeVGA = true generate
         -- Scan Doubler from the MIST project
         inst_mist_scandoubler: entity work.mist_scandoubler port map (
             clk       => clk_32M00,
@@ -1571,7 +1579,7 @@ begin
         ttxt_hs_out <= mist_hs   when mode(1) = '1' else crtc_hsync_n and crtc_vsync_n;
     end generate;
 
-    JafaAndNotVGAIncluded: if IncludeJafaMode7 and not IncludeVGA generate
+    JafaAndNotVGAIncluded: if IncludeJafaMode7 = true and IncludeVGA = false generate
         ttxt_r_out  <= ttxt_r;
         ttxt_g_out  <= ttxt_g;
         ttxt_b_out  <= ttxt_b;
@@ -1579,7 +1587,7 @@ begin
         ttxt_hs_out <= crtc_hsync_n and crtc_vsync_n;
     end generate;
 
-    JafaNotIncluded: if not IncludeJafaMode7 generate
+    JafaNotIncluded: if IncludeJafaMode7 = false generate
         -- disable mode 7
         mode7_enable <= '0';
     end generate;
