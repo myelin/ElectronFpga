@@ -40,7 +40,7 @@ set_global_assignment -name DEVICE 10M08SCU169C8G
 set_global_assignment -name TOP_LEVEL_ENTITY ElectronULA_max10
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 17.1.0
 set_global_assignment -name PROJECT_CREATION_TIME_DATE "00:57:33  JANUARY 29, 2018"
-set_global_assignment -name LAST_QUARTUS_VERSION "17.1.0 Lite Edition"
+set_global_assignment -name LAST_QUARTUS_VERSION "19.1.0 Lite Edition"
 set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
 set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
@@ -198,11 +198,11 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to flash_IO1
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to mcu_debug_TXD
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to flash_IO3
 set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to flash_IO2
+set_global_assignment -name VERILOG_FILE ../src/altera/sdram_simple.v
 set_global_assignment -name VHDL_FILE ../src/common/mode7/saa5050_rom_dual_port_uninitialized.vhd
 set_global_assignment -name VERILOG_FILE ../src/altera/qpi_flash.v
 set_global_assignment -name VERILOG_FILE ../src/common/ROM/expansion_rom.v
 set_global_assignment -name VHDL_FILE ../src/altera/ElectronULA_max10.vhd
-set_global_assignment -name VHDL_FILE ../src/altera/sdram_simple.vhd
 set_global_assignment -name VHDL_FILE ../src/altera/pll1.vhd
 set_global_assignment -name VHDL_FILE ../src/altera/pll2.vhd
 set_global_assignment -name VHDL_FILE ../src/altera/i2s_intf.vhd

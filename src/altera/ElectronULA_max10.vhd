@@ -167,6 +167,38 @@ component qpi_flash is
     );
 end component qpi_flash;
 
+-- Likewise with this: Verilog components need manual definition
+component sdram_simple is
+   port(
+      -- Host side
+      clk_100m0_i    : in std_logic;            -- Master clock
+      clk_en         : in std_logic;            -- Master clock enable
+      reset_i        : in std_logic;            -- Reset, active high
+      refresh_i      : in std_logic;            -- Initiate a refresh cycle, active high
+      rw_i           : in std_logic;            -- Initiate a read or write operation, active high
+      we_i           : in std_logic;            -- Write enable, active low
+      addr_i         : in std_logic_vector(23 downto 0) := (others => '0');   -- Address from host to SDRAM
+      data_i         : in std_logic_vector(15 downto 0) := (others => '0');   -- Data from host to SDRAM
+      ub_i           : in std_logic;            -- Data upper byte enable, active low
+      lb_i           : in std_logic;            -- Data lower byte enable, active low
+      ready_o        : out std_logic;           -- Set to '1' when the memory is ready
+      done_o         : out std_logic;           -- Read, write, or refresh, operation is done
+      data_o         : out std_logic_vector(15 downto 0);   -- Data from SDRAM to host
+
+      -- SDRAM side
+      sdCke_o        : out std_logic;           -- Clock-enable to SDRAM
+      sdCe_bo        : out std_logic;           -- Chip-select to SDRAM
+      sdRas_bo       : out std_logic;           -- SDRAM row address strobe
+      sdCas_bo       : out std_logic;           -- SDRAM column address strobe
+      sdWe_bo        : out std_logic;           -- SDRAM write enable
+      sdBs_o         : out std_logic_vector(1 downto 0);    -- SDRAM bank address
+      sdAddr_o       : out std_logic_vector(12 downto 0);   -- SDRAM row/column address
+      sdData_io      : inout std_logic_vector(15 downto 0); -- Data to/from SDRAM
+      sdDqmh_o       : out std_logic;           -- Enable upper-byte of SDRAM databus if true
+      sdDqml_o       : out std_logic            -- Enable lower-byte of SDRAM databus if true
+   );
+end component sdram_simple;
+
 -- Maps to either clk_in or clk_osc depending which one we are using
 signal clock_input       : std_logic;
 -- Generated clocks:
@@ -902,7 +934,7 @@ begin
         end if;
     end process;
 
-    sdram_controller : entity work.sdram_simple PORT MAP (
+    sdram_controller : sdram_simple PORT MAP (
         -- Host side
         clk_100m0_i => clock_96,
         clk_en      => sdram_clken,
