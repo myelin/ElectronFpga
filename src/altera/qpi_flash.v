@@ -133,7 +133,6 @@ reg [5:0] qpi_output_count = 0;  // countdown to turnaround
 `define TXN_IDLE 0
 `define TXN_START 1
 `define TXN_RUNNING 2
-`define TXN_FINISH 3
 `define TXN_DONE 4
 
 reg [2:0] txn_state = `TXN_IDLE;
@@ -216,9 +215,7 @@ always @(posedge clk) begin
                 txn_state <= `TXN_RUNNING;
             end
             `TXN_RUNNING : begin
-                if (shift_count == 0) begin
-                    txn_state <= `TXN_FINISH;
-                end else if (flash_SCK == 1'b0) begin
+                if (flash_SCK == 1'b0) begin
                     // Rising SCK edge
                     flash_SCK <= 1'b1;
                 end else begin
@@ -227,11 +224,12 @@ always @(posedge clk) begin
                     output_IO[0] = shifter[39];
                     shifter <= {shifter[38:0], flash_IO1};
                     shift_count <= shift_count - 7'd1;
+                    if (shift_count == 7'd1) begin
+                        // Finished with transaction; we can raise /CE on the falling SCK edge
+                        flash_nCE <= 1'b1;
+                        txn_state <= `TXN_DONE;
+                    end
                 end
-            end
-            `TXN_FINISH : begin
-                flash_nCE <= 1'b1;
-                txn_state <= `TXN_DONE;
             end
         endcase
     end
@@ -247,9 +245,7 @@ always @(posedge clk) begin
                 txn_state <= `TXN_RUNNING;
             end
             `TXN_RUNNING : begin
-                if (shift_count == 0) begin
-                    txn_state <= `TXN_FINISH;
-                end else if (flash_SCK == 1'b0) begin
+                if (flash_SCK == 1'b0) begin
                     // Rising SCK edge
                     flash_SCK <= 1'b1;
                 end else begin
@@ -266,12 +262,13 @@ always @(posedge clk) begin
                     if (qpi_output == 0 && shift_count == 7'd4) begin
                         data_out <= {shifter[3:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
                     end
+                    if (shift_count == 7'd4) begin
+                        // Finished with transaction; we can raise /CE on the falling SCK edge
+                        flash_nCE <= 1'b1;
+                        qpi_output <= 1'b0;
+                        txn_state <= `TXN_DONE;
+                    end
                 end
-            end
-            `TXN_FINISH : begin
-                flash_nCE <= 1'b1;
-                qpi_output <= 1'b0;
-                txn_state <= `TXN_DONE;
             end
         endcase
     end

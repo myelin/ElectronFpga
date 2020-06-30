@@ -88,16 +88,19 @@ module qpi_flash_test;
     .flash_IO3(flash_IO3)
   );
 
+  // Expect the controller to output a given byte on flash_IO on the next two clocks, or fail
   task expectout;
     input [7:0] expected_byte;
 
     reg [7:0] in_byte;
 
     begin
-      @(negedge flash_SCK);
+      `assert(flash_nCE == 1'b0, "FAIL: flash deselected during transaction");
+      @(posedge flash_SCK);
       in_byte[7:4] = {flash_IO3, flash_IO2, flash_IO1, flash_IO0};
-      @(negedge flash_SCK);
+      @(posedge flash_SCK);
       in_byte[3:0] = {flash_IO3, flash_IO2, flash_IO1, flash_IO0};
+      @(negedge flash_SCK);
       $display("Controller output %02x (expected %02x)", in_byte, expected_byte);
       if (in_byte != expected_byte) begin
         $display("FAIL");
@@ -106,11 +109,33 @@ module qpi_flash_test;
     end
   endtask
 
-  // simulate byte sent in from flash to fpga
+  // Expect the controller to output a given byte on flash_IO on the next two clocks, or fail
+  task expectoutspi;
+    input [7:0] expected_byte;
+
+    reg [7:0] in_byte;
+
+    begin
+      `assert(flash_nCE == 1'b0, "FAIL: flash deselected during transaction");
+      repeat(8) begin
+        @(posedge flash_SCK);
+        in_byte = {in_byte[6:0], flash_IO0};
+      end
+      @(negedge flash_SCK);
+      $display("Controller SPI output %02x (expected %02x)", in_byte, expected_byte);
+      if (in_byte != expected_byte) begin
+        $display("FAIL");
+        $finish;
+      end
+    end
+  endtask
+
+  // Simulate byte sent in from flash to controller
   task inbyte;
     input [7:0] byte;
 
     begin
+      `assert(flash_nCE == 1'b0, "FAIL: flash deselected during transaction");
       output_IO = byte[7:4];
       @(negedge flash_SCK);
       output_IO = byte[3:0];
@@ -180,11 +205,46 @@ module qpi_flash_test;
     reset = 1;
     repeat(10) @(posedge clk);
     reset = 0;
-    waiting_for_reset = 1;
-    reset_wait_count = 0;
-    reset_wait_finished = 0;
-    @(posedge reset_wait_finished);
 
+    // Follow the reset process
+    @(negedge flash_nCE);
+    $display("* SPI FF to disable continuous read");
+    expectoutspi(8'hFF);
+    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    $display("* QPI FF to disable QPI");
+    @(negedge flash_nCE);
+    expectout(8'hFF);
+    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    // @(posedge ready); $finish;
+    $display("* SPI 38 to re-enter QPI");
+    @(negedge flash_nCE);
+    expectoutspi(8'h38);
+    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    $display("* QPI C0 00 to set 2 dummy clocks");
+    @(negedge flash_nCE);
+    expectout(8'hC0);
+    expectout(8'h00);
+    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    $display("* QPI: set up continuous read");
+    @(negedge flash_nCE);
+    expectout(8'hEB);
+    expectout(8'h00);
+    expectout(8'h00);
+    expectout(8'h03);
+    expectout(8'h20);
+    inbyte(8'hff);
+    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    $display("* QPI: test continuous read");
+    @(negedge flash_nCE);
+    expectout(8'h00);
+    expectout(8'h00);
+    expectout(8'h07);
+    expectout(8'h20);
+    inbyte(8'hff);
+    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+
+    // Expect `ready` to go high shortly after the reset transactions
+    repeat(4) @(posedge clk);
     `assert(ready == 1'b1, "FAIL: device not ready");
 
     $display("\n\nReset successful; trying a read (0 alignment)");
@@ -193,6 +253,7 @@ module qpi_flash_test;
     @(posedge clk);
     #1 read = 0;
     // wait for 4 qpi bytes
+    @(negedge flash_nCE);
     expectout(8'h12);
     expectout(8'h34);
     expectout(8'h54);
@@ -200,109 +261,11 @@ module qpi_flash_test;
     // now push some data
     inbyte(8'hAB);
     // wait for end of txn
-    @(posedge flash_nCE);
+    if (flash_nCE == 1'b0) @(posedge flash_nCE);
     $display("Read transaction finished, by the looks of things; shifter == %x", dut.shifter);
     // `assert(dut.shifter[31:0] == 32'habcdef12, "shift value incorrect");
     $display("data_out == %x", data_out);
     `assert(data_out == 8'hab, "data_out incorrect");
-
-    // $finish;
-
-    // $display("\n\nReset successful; trying a read (1 alignment)");
-    // addr <= 24'h000005;
-    // read <= 1;
-    // @(posedge clk);
-    // read <= 0;
-    // // wait for 4 qpi bytes
-    // repeat(8) @(negedge flash_SCK);
-    // // now push some data
-    // output_IO <= 4'h1;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h2;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h3;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h4;
-    // @(negedge flash_SCK);
-    // // output_IO <= 4'h5;
-    // // @(negedge flash_SCK);
-    // // output_IO <= 4'h6;
-    // // @(negedge flash_SCK);
-    // // output_IO <= 4'h7;
-    // // @(negedge flash_SCK);
-    // // output_IO <= 4'h8;
-    // // @(negedge flash_SCK);
-    // output_IO <= 4'bz;
-    // // wait for end of txn
-    // @(posedge flash_nCE);
-    // $display("Read transaction finished, by the looks of things; shifter == %x", dut.shifter);
-    // // `assert(dut.shifter[31:0] == 32'h12345678, "shift value incorrect");
-    // $display("data_out == %x", data_out);
-    // `assert(data_out == 8'h34, "data_out incorrect");
-
-    // $display("\n\nReset successful; trying a read (2 alignment)");
-    // addr <= 24'hfffff2;
-    // read <= 1;
-    // @(posedge clk);
-    // read <= 0;
-    // // wait for 4 qpi bytes
-    // repeat(8) @(negedge flash_SCK);
-    // // now push some data
-    // output_IO <= 4'h1;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'ha;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h2;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'hb;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h3;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'hc;
-    // @(negedge flash_SCK);
-    // // output_IO <= 4'h4;
-    // // @(negedge flash_SCK);
-    // // output_IO <= 4'hd;
-    // // @(negedge flash_SCK);
-    // output_IO <= 4'bz;
-    // // wait for end of txn
-    // @(posedge flash_nCE);
-    // $display("Read transaction finished, by the looks of things; shifter == %x", dut.shifter);
-    // // `assert(dut.shifter[31:0] == 32'h1a2b3c4d, "shift value incorrect");
-    // $display("data_out == %x", data_out);
-    // `assert(data_out == 8'h3c, "data_out incorrect");
-
-    // $display("\n\nReset successful; trying a read (3 alignment)");
-    // addr <= 24'hcccc5b;
-    // read <= 1;
-    // @(posedge clk);
-    // read <= 0;
-    // // wait for 4 qpi bytes
-    // repeat(8) @(negedge flash_SCK);
-    // // now push some data
-    // output_IO <= 4'hf;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h9;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'he;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h8;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'hd;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h7;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'hc;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'h6;
-    // @(negedge flash_SCK);
-    // output_IO <= 4'bz;
-    // // wait for end of txn
-    // @(posedge flash_nCE);
-    // $display("Read transaction finished, by the looks of things; shifter == %x", dut.shifter);
-    // // `assert(dut.shifter[31:0] == 32'hf9e8d7c6, "shift value incorrect");
-    // $display("data_out == %x", data_out);
-    // `assert(data_out == 8'hc6, "data_out incorrect");
 
     // finish off
     $display("running out the clock");
