@@ -119,6 +119,7 @@ module qpi_flash_test;
       `assert(flash_nCE == 1'b0, "FAIL: flash deselected during transaction");
       repeat(8) begin
         @(posedge flash_SCK);
+        $display("bit %d", flash_IO0);
         in_byte = {in_byte[6:0], flash_IO0};
       end
       @(negedge flash_SCK);
@@ -168,7 +169,7 @@ module qpi_flash_test;
   end
 
   always @(posedge flash_SCK) begin
-    if (dut.qpi_mode == 1) begin
+    if (dut.qpi_mode == 1 && flash_nCE == 0) begin
       spi_shift = {spi_shift[`SHIFT_HIGH-4:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
       $display("rising QPI edge with output nybble %x", {flash_IO3, flash_IO2, flash_IO1, flash_IO0});
       shift_count = shift_count + 4;
@@ -177,13 +178,10 @@ module qpi_flash_test;
       // $display("rising SPI edge with MOSI %x", flash_IO0);
       shift_count = shift_count + 1;
     end
-  end
-
-  always @(negedge flash_SCK) begin
-      if (shift_count == 8) begin
-        $display("-> output byte %x", spi_shift[7:0]);
-        shift_count = 0;
-      end
+    if (shift_count == 8) begin
+      $display("-> output byte %x", spi_shift[7:0]);
+      shift_count = 0;
+    end
   end
 
   always @(posedge clk) begin

@@ -149,6 +149,8 @@ assign flash_IO3 = (qpi_output == 1'b1) ? output_IO[3] : 1'bZ;
 
 always @(posedge clk) begin
 
+    flash_SCK <= !flash_SCK;
+
     // Lowest priority: read by MCU
     if (passthrough == 0 && read == 1) begin
         $display("Read triggered with addr %x", addr);
@@ -206,7 +208,7 @@ always @(posedge clk) begin
     end
 
     // Execute SPI requests
-    if (spi_mode == 1'b1) begin
+    if (spi_mode == 1'b1 && flash_SCK == 1'b1) begin
         case (txn_state)
             `TXN_START : begin
                 flash_nCE <= 1'b0;
@@ -215,27 +217,21 @@ always @(posedge clk) begin
                 txn_state <= `TXN_RUNNING;
             end
             `TXN_RUNNING : begin
-                if (flash_SCK == 1'b0) begin
-                    // Rising SCK edge
-                    flash_SCK <= 1'b1;
-                end else begin
-                    // Falling SCK edge; clock data in and out
-                    flash_SCK <= 1'b0;
-                    output_IO[0] = shifter[39];
-                    shifter <= {shifter[38:0], flash_IO1};
-                    shift_count <= shift_count - 7'd1;
-                    if (shift_count == 7'd1) begin
-                        // Finished with transaction; we can raise /CE on the falling SCK edge
-                        flash_nCE <= 1'b1;
-                        txn_state <= `TXN_DONE;
-                    end
+                // Falling SCK edge; clock data in and out
+                output_IO[0] = shifter[39];
+                shifter <= {shifter[38:0], flash_IO1};
+                shift_count <= shift_count - 7'd1;
+                if (shift_count == 7'd1) begin
+                    // Finished with transaction; we can raise /CE on the falling SCK edge
+                    flash_nCE <= 1'b1;
+                    txn_state <= `TXN_DONE;
                 end
             end
         endcase
     end
 
     // Execute QPI requests
-    if (qpi_mode == 1'b1) begin
+    if (qpi_mode == 1'b1 && flash_SCK == 1'b1) begin
         case (txn_state)
             `TXN_START : begin
                 flash_nCE <= 1'b0;
@@ -245,29 +241,23 @@ always @(posedge clk) begin
                 txn_state <= `TXN_RUNNING;
             end
             `TXN_RUNNING : begin
-                if (flash_SCK == 1'b0) begin
-                    // Rising SCK edge
-                    flash_SCK <= 1'b1;
+                // Falling SCK edge; clock data in and out
+                output_IO <= shifter[39:36];
+                shifter <= {shifter[35:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
+                shift_count <= shift_count - 7'd4;
+                if (qpi_output_count == 4) begin
+                    qpi_output <= 0;
                 end else begin
-                    // Falling SCK edge; clock data in and out
-                    flash_SCK <= 1'b0;
-                    output_IO <= shifter[39:36];
-                    shifter <= {shifter[35:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
-                    shift_count <= shift_count - 7'd4;
-                    if (qpi_output_count == 4) begin
-                        qpi_output <= 0;
-                    end else begin
-                        qpi_output_count <= qpi_output_count - 6'd4;
-                    end
-                    if (qpi_output == 0 && shift_count == 7'd4) begin
-                        data_out <= {shifter[3:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
-                    end
-                    if (shift_count == 7'd4) begin
-                        // Finished with transaction; we can raise /CE on the falling SCK edge
-                        flash_nCE <= 1'b1;
-                        qpi_output <= 1'b0;
-                        txn_state <= `TXN_DONE;
-                    end
+                    qpi_output_count <= qpi_output_count - 6'd4;
+                end
+                if (qpi_output == 0 && shift_count == 7'd4) begin
+                    data_out <= {shifter[3:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
+                end
+                if (shift_count == 7'd4) begin
+                    // Finished with transaction; we can raise /CE on the falling SCK edge
+                    flash_nCE <= 1'b1;
+                    qpi_output <= 1'b0;
+                    txn_state <= `TXN_DONE;
                 end
             end
         endcase
@@ -282,7 +272,6 @@ always @(posedge clk) begin
             ready <= 1'b0;
 
             flash_nCE <= 1'b1;
-            flash_SCK <= 1'b0;
             output_IO <= 4'b0;
             spi_mode <= 1'b1;
             qpi_mode <= 1'b0;
