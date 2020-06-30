@@ -18,6 +18,9 @@
 
 `define assert(condition, message) if(!(condition)) begin $display("ASSERTION FAILED: %s", message); $finish(1); end
 
+// 1 to test for 96 MHz operation, 0 for 48 MHz
+`define FAST_MODE 1
+
 module qpi_flash_test;
 
   // test clock
@@ -87,6 +90,7 @@ module qpi_flash_test;
     .flash_IO2(flash_IO2),
     .flash_IO3(flash_IO3)
   );
+  defparam dut.EXTRA_DUMMY_CLOCKS = `FAST_MODE ? 4 : 0;
 
   // Expect the controller to output a given byte on flash_IO on the next two clocks, or fail
   task expectout;
@@ -105,6 +109,15 @@ module qpi_flash_test;
       if (in_byte != expected_byte) begin
         $display("FAIL");
         $finish;
+      end
+    end
+  endtask
+
+  task expectdummyclocks;
+    begin
+      if (`FAST_MODE) begin
+        expectout(8'h0);
+        expectout(8'h0);
       end
     end
   endtask
@@ -218,10 +231,14 @@ module qpi_flash_test;
     @(negedge flash_nCE);
     expectoutspi(8'h38);
     `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
-    $display("* QPI C0 00 to set 2 dummy clocks");
+    if (`FAST_MODE) begin
+      $display("* QPI C0 20 to set 6 dummy clocks (for 96 MHz operation)");
+    end else begin
+      $display("* QPI C0 00 to set 2 dummy clocks (for 48 MHz operation)");
+    end;
     @(negedge flash_nCE);
     expectout(8'hC0);
-    expectout(8'h00);
+    expectout(`FAST_MODE ? 8'h20 : 8'h00);
     `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
     $display("* QPI: set up continuous read");
     @(negedge flash_nCE);
@@ -230,6 +247,7 @@ module qpi_flash_test;
     expectout(8'h00);
     expectout(8'h03);
     expectout(8'h20);
+    expectdummyclocks();
     inbyte(8'hff);
     `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
     $display("* QPI: test continuous read");
@@ -238,6 +256,7 @@ module qpi_flash_test;
     expectout(8'h00);
     expectout(8'h07);
     expectout(8'h20);
+    expectdummyclocks();
     inbyte(8'hff);
     `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
 
@@ -256,6 +275,7 @@ module qpi_flash_test;
     expectout(8'h34);
     expectout(8'h54);
     expectout(8'h20);
+    expectdummyclocks();
     // now push some data
     inbyte(8'hAB);
     // wait for end of txn

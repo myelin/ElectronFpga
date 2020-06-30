@@ -92,6 +92,9 @@ module qpi_flash(
 
 );
 
+// Set to 4 to run at 96 MHz
+parameter EXTRA_DUMMY_CLOCKS = 0;
+
 // Setup/hold notes:
 // - Don't change /CS within 3ns of a rising clock edge.  (min 3ns clk to flash_nCE)
 // - IO* setup 1ns hold 2ns w.r.t. SCK.  (min 2ns clk to flash_IO*)
@@ -115,8 +118,12 @@ reg [3:0] reset_state = 0;
 // Reset: 30us counter
 reg [12:0] reset_delay_counter = 13'b0;
 
+// Set to 0 for 48 MHz, 4 for 96 MHz operation.
+`define EXTRA_DUMMY_BITS (EXTRA_DUMMY_CLOCKS * 4)
+`define DUMMY_DATA {`EXTRA_DUMMY_BITS{1'b0}}
+`define SHIFTER_SIZE (40 + `EXTRA_DUMMY_BITS)
 // Shifter for IO[3:0]
-reg [39:0] shifter = 0;
+reg [`SHIFTER_SIZE-1:0] shifter = 0;
 reg [6:0] shift_count = 0;
 
 // Tracking previous passthrough value so we can reset after a passthrough ends
@@ -161,8 +168,9 @@ always @(posedge clk) begin
         // shift_count <= 7'd24 + 7'd8 + 7'd8 + (7'd8 * addr[1:0]);  // read 1-4 data bytes
 
         // 1-byte alignment (seems to work, despite what the datasheet says...)
-        shifter <= {addr, 8'h20, 8'b0};
-        shift_count <= 7'd24 + 7'd8 + 7'd8;  // read one data byte
+        // Address:24, Mode:8, [Dummy:16 if in 96MHz mode], Response:8
+        shifter <= {addr, 8'h20, `DUMMY_DATA, 8'b0};
+        shift_count <= 7'd24 + 7'd8 + `EXTRA_DUMMY_BITS + 7'd8;  // read one data byte
 
         txn_state <= `TXN_START;
         reading <= 1;
@@ -212,14 +220,14 @@ always @(posedge clk) begin
         case (txn_state)
             `TXN_START : begin
                 flash_nCE <= 1'b0;
-                output_IO[0] = shifter[39];
-                shifter <= {shifter[38:0], 1'b0};
+                output_IO[0] = shifter[`SHIFTER_SIZE-1];
+                shifter <= {shifter[`SHIFTER_SIZE-2:0], 1'b0};
                 txn_state <= `TXN_RUNNING;
             end
             `TXN_RUNNING : begin
                 // Falling SCK edge; clock data in and out
-                output_IO[0] = shifter[39];
-                shifter <= {shifter[38:0], flash_IO1};
+                output_IO[0] = shifter[`SHIFTER_SIZE-1];
+                shifter <= {shifter[`SHIFTER_SIZE-2:0], flash_IO1};
                 shift_count <= shift_count - 7'd1;
                 if (shift_count == 7'd1) begin
                     // Finished with transaction; we can raise /CE on the falling SCK edge
@@ -235,15 +243,15 @@ always @(posedge clk) begin
         case (txn_state)
             `TXN_START : begin
                 flash_nCE <= 1'b0;
-                output_IO <= shifter[39:36];
-                shifter <= {shifter[35:0], 4'b0};
+                output_IO <= shifter[`SHIFTER_SIZE-1:`SHIFTER_SIZE-4];
+                shifter <= {shifter[`SHIFTER_SIZE-5:0], 4'b0};
                 qpi_output <= 1;
                 txn_state <= `TXN_RUNNING;
             end
             `TXN_RUNNING : begin
                 // Falling SCK edge; clock data in and out
-                output_IO <= shifter[39:36];
-                shifter <= {shifter[35:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
+                output_IO <= shifter[`SHIFTER_SIZE-1:`SHIFTER_SIZE-4];
+                shifter <= {shifter[`SHIFTER_SIZE-5:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
                 shift_count <= shift_count - 7'd4;
                 if (qpi_output_count == 4) begin
                     qpi_output <= 0;
@@ -290,7 +298,7 @@ always @(posedge clk) begin
             case (txn_state)
                 `TXN_IDLE : begin
                     $display("qpi_flash: Disabling continuous read");
-                    shifter <= 40'hFF00000000;
+                    shifter <= {40'hFF00000000, `DUMMY_DATA};
                     shift_count <= 8;
                     txn_state <= `TXN_START;
                 end
@@ -309,7 +317,7 @@ always @(posedge clk) begin
             case (txn_state)
                 `TXN_IDLE : begin
                     $display("qpi_flash: Disabling QPI mode");
-                    shifter <= 40'hFF00000000;
+                    shifter <= {40'hFF00000000, `DUMMY_DATA};
                     // Temporarily switch to QPI mode
                     spi_mode <= 0;
                     qpi_mode <= 1;
@@ -338,7 +346,7 @@ always @(posedge clk) begin
        //    // Now a two-byte (66 99) SPI transaction to reset the chip.
        //    case (txn_state)
        //        `TXN_IDLE : begin
-       //            shifter <= 40'h6699000000;
+       //            shifter <= {40'h6699000000, `DUMMY_DATA};
        //            shift_count <= 8;
        //        end
        //        `TXN_DONE : begin
@@ -362,7 +370,7 @@ always @(posedge clk) begin
             case (txn_state)
                 `TXN_IDLE : begin
                     $display("qpi_flash: Entering QPI mode");
-                    shifter <= 40'h3800000000;
+                    shifter <= {40'h3800000000, `DUMMY_DATA};
                     shift_count <= 8;
                     txn_state <= `TXN_START;
                 end
@@ -379,13 +387,14 @@ always @(posedge clk) begin
 
         `RESET_SET_DUMMY_CLOCKS : begin
 
-            // Now a two-byte (C0 00) QPI transaction to set 2 dummy clocks
-            // (which is what we need below 50 MHz).
+            // Now a two-byte (C0 20) QPI transaction to set 6 dummy clocks
+            // (which is what we need below 100 MHz), or C0 00 to set 2 dummy
+            // clocks if clk < 50 MHz.
 
             case (txn_state)
                 `TXN_IDLE : begin
                     $display("qpi_flash: Setting read params");
-                    shifter <= 40'hC000000000;
+                    shifter <= {8'hC0, (EXTRA_DUMMY_CLOCKS == 4 ? 8'h20 : 8'h00), 24'h0, `DUMMY_DATA};
                     shift_count <= 16;
                     qpi_output_count <= 20;  // Remain in output state after txn
                     txn_state <= `TXN_START;
@@ -406,13 +415,13 @@ always @(posedge clk) begin
             case (txn_state)
                 `TXN_IDLE : begin
                     $display("qpi_flash: Entering continuous read mode");
-                    // shifter <= 40'hEB00000020;
-                    // shifter <= 40'hEB00000120;  // test unaligned read; expect ab
-                    // shifter <= 40'hEB00000220;  // test unaligned read; expect 8e
-                    shifter <= 40'hEB00000320;  // test unaligned read; expect 82 (or 4c with single byte read)
+                    // shifter <= {40'hEB00000020, `DUMMY_DATA};
+                    // shifter <= {40'hEB00000120, `DUMMY_DATA};  // test unaligned read; expect ab
+                    // shifter <= {40'hEB00000220, `DUMMY_DATA};  // test unaligned read; expect 8e
+                    shifter <= {40'hEB00000320, `DUMMY_DATA};  // test unaligned read; expect 82 (or 4c with single byte read)
                     // shift_count <= 72;  // read 4 bytes at the end
-                    shift_count <= 48;  // read one byte at the end
-                    qpi_output_count <= 40;
+                    shift_count <= 48 + `EXTRA_DUMMY_BITS;  // read one byte at the end
+                    qpi_output_count <= 40 + `EXTRA_DUMMY_BITS;
                     txn_state <= `TXN_START;
                 end
                 `TXN_DONE : begin
@@ -430,9 +439,9 @@ always @(posedge clk) begin
             case (txn_state)
                 `TXN_IDLE : begin
                     $display("qpi_flash: Testing continuous read mode");
-                    shifter <= 40'h0000072000;  // test unaligned read; expect 1b
-                    shift_count <= 40;  // read one byte at the end
-                    qpi_output_count <= 32;
+                    shifter <= {40'h0000072000, `DUMMY_DATA};  // test unaligned read; expect 1b
+                    shift_count <= 40 + `EXTRA_DUMMY_BITS;  // read one byte at the end
+                    qpi_output_count <= 32 + `EXTRA_DUMMY_BITS;
                     txn_state <= `TXN_START;
                 end
                 `TXN_DONE : begin
