@@ -84,7 +84,7 @@ module qpi_flash(
 
     // Flash pins
     output reg flash_nCE = 1,
-    output reg flash_SCK = 0,
+    output wire flash_SCK,
     inout wire flash_IO0,
     inout wire flash_IO1,
     inout wire flash_IO2,
@@ -92,12 +92,16 @@ module qpi_flash(
 
 );
 
+// Set to 1 to run at full clock rate, using a DDR clock buffer for flash_SCK
+parameter FAST_MODE = 1;
+
 // Set to 4 to run at 96 MHz
-parameter EXTRA_DUMMY_CLOCKS = 0;
+`define EXTRA_DUMMY_CLOCKS (FAST_MODE ? 4 : 0)
 
 // Setup/hold notes:
 // - Don't change /CS within 3ns of a rising clock edge.  (min 3ns clk to flash_nCE)
 // - IO* setup 1ns hold 2ns w.r.t. SCK.  (min 2ns clk to flash_IO*)
+// - Data output by the flash is referenced to the falling edge of SCK: 6ns clock low to output, 1.5ns hold.
 
 // Reset: state register
 reg [3:0] reset_state = 0;
@@ -119,7 +123,7 @@ reg [3:0] reset_state = 0;
 reg [12:0] reset_delay_counter = 13'b0;
 
 // Set to 0 for 48 MHz, 4 for 96 MHz operation.
-`define EXTRA_DUMMY_BITS (EXTRA_DUMMY_CLOCKS * 4)
+`define EXTRA_DUMMY_BITS (`EXTRA_DUMMY_CLOCKS * 4)
 `define DUMMY_DATA {`EXTRA_DUMMY_BITS{1'b0}}
 `define SHIFTER_SIZE (40 + `EXTRA_DUMMY_BITS)
 // Shifter for IO[3:0]
@@ -154,14 +158,43 @@ assign flash_IO1 = (qpi_output == 1'b1) ? output_IO[1] : 1'bZ;
 assign flash_IO2 = (qpi_output == 1'b1) ? output_IO[2] : 1'bZ;
 assign flash_IO3 = (qpi_output == 1'b1) ? output_IO[3] : 1'bZ;
 
+// Clock generation.
+// In passthrough mode, these follow passthrough_SCK.
+// In 48MHz mode, these alternate between 0 and 1.
+// In 96MHz mode, these are constant at 0 and 1.
+reg sck_int_h = 0;
+reg sck_int_l = 0;
+
+// When not in fast mode, we should only output data when sck_int_h == 0, i.e.
+// the latched datain_h is 1 and going low.  (sck_ddr_buf latches its inputs,
+// so they're a clock behind sck_int_h and sck_int_l).
+`define CLOCK_ENABLED (FAST_MODE || sck_int_h == 1'b0)
+
+altddio_out sck_ddr_buf (
+    .datain_h (sck_int_h),
+    .datain_l (sck_int_l),
+    .outclock (clk),
+    .dataout (flash_SCK));
+defparam
+    sck_ddr_buf.width = 1;
+
 always @(posedge clk) begin
 
-    flash_SCK <= !flash_SCK;
+    // Generate clock
+    if (FAST_MODE) begin
+        // 96 MHz: DDR output buffers and invertes the 96 MHz clock
+        sck_int_h <= 0;
+        sck_int_l <= 1;
+    end else begin
+        // 48 MHz: half-speed clock generated here
+        sck_int_h <= !sck_int_l;
+        sck_int_l <= !sck_int_l;
+    end
 
     // Lowest priority: read by MCU
     if (passthrough == 0 && read == 1) begin
         $display("Read triggered with addr %x", addr);
-        qpi_output_count <= 6'd24 + 6'd8;  // output address and mode byte
+        qpi_output_count <= 6'd24 + 6'd8 + `EXTRA_DUMMY_BITS;  // output address and mode byte
 
         // 4-byte alignment
         // shifter <= {addr[23:2], 2'b00, 8'h20, 8'b0};  // addr & ~3
@@ -184,10 +217,13 @@ always @(posedge clk) begin
         // allowing for 170 ns address setup (30ns PHI0-PHI2 delay, 140ns
         // PHI2-A setup) and 50ns data hold.
 
-        // The current read algorithm here will take 1 + (24 + 8 + 32) / 2 + 3
-        // clocks (two clocks to transmit 4 bits in the data phase) = 36 x
-        // 10.42 ns = 375.12 ns, so it should work with an internal T65 but
-        // not an external 6502 yet.
+        // In 48MHz mode (FAST_MODE == 0), a read takes (24 + 8 + 8) / 4 * 2
+        // clocks (two clocks to transmit 4 bits in the data phase) = 20 x
+        // 10.42 ns = 208.4 ns, which works at 2MHz with an external CPU.
+
+        // In 96MHz mode (FAST_MODE == 1), a read takes (24 + 24 + 8) / 4
+        // clocks (one clock per 4 bits, but with an extra 4 clock delay on
+        // the read command) = 14 * 10.42 = 145.9 ns.
 
     end
     if (reading && txn_state == `TXN_DONE) begin
@@ -202,7 +238,8 @@ always @(posedge clk) begin
         qpi_mode <= 0;
         qpi_output <= 1'b0;
         flash_nCE <= passthrough_nCE;
-        flash_SCK <= passthrough_SCK;
+        sck_int_h <= passthrough_SCK;
+        sck_int_l <= passthrough_SCK;
         output_IO[0] <= passthrough_MOSI;
     end
     last_passthrough <= passthrough;
@@ -216,7 +253,7 @@ always @(posedge clk) begin
     end
 
     // Execute SPI requests
-    if (spi_mode == 1'b1 && flash_SCK == 1'b1) begin
+    if (spi_mode == 1'b1 && `CLOCK_ENABLED) begin
         case (txn_state)
             `TXN_START : begin
                 flash_nCE <= 1'b0;
@@ -239,7 +276,7 @@ always @(posedge clk) begin
     end
 
     // Execute QPI requests
-    if (qpi_mode == 1'b1 && flash_SCK == 1'b1) begin
+    if (qpi_mode == 1'b1 && (FAST_MODE || sck_int_h == 1'b0)) begin
         case (txn_state)
             `TXN_START : begin
                 flash_nCE <= 1'b0;
@@ -393,8 +430,8 @@ always @(posedge clk) begin
 
             case (txn_state)
                 `TXN_IDLE : begin
-                    $display("qpi_flash: Setting read params");
-                    shifter <= {8'hC0, (EXTRA_DUMMY_CLOCKS == 4 ? 8'h20 : 8'h00), 24'h0, `DUMMY_DATA};
+                    $display("qpi_flash: Setting read params with %0d extra dummy clocks", `EXTRA_DUMMY_CLOCKS);
+                    shifter <= {8'hC0, (`EXTRA_DUMMY_CLOCKS == 4 ? 8'h20 : 8'h00), 24'h0, `DUMMY_DATA};
                     shift_count <= 16;
                     qpi_output_count <= 20;  // Remain in output state after txn
                     txn_state <= `TXN_START;

@@ -47,7 +47,7 @@ entity ElectronULA_max10 is
 
         -- QSPI flash chip
         flash_nCE     : out std_logic := '1';  -- pulled high on board
-        flash_SCK     : out std_logic := '0';
+        flash_SCK     : out std_logic;
         flash_IO0     : inout std_logic := 'Z';  -- MOSI
         flash_IO1     : inout std_logic := 'Z';  -- MISO
         flash_IO2     : inout std_logic := 'Z';  -- /WP

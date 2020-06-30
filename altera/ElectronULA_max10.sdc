@@ -62,12 +62,14 @@ derive_clock_uncertainty
 
 # *** QPI flash at 96MHz ***
 
-# We're running the flash clock at half the system clock, so we're quite
-# tolerant of delays.  If we can constrain the forwarded clock and all the
-# data signals to at least be close enough to each other, we'll be OK.
-# I wonder if we can just constrain the forwarded clock to transition in a
-# particular window -- for example -min 3 -max -5, for 8ns stable time and
-# a clock-to-output window of 3ns-5.52ns.
+# I couldn't figure out how to get this properly constrained, so all the flash
+# ports are just packed into fast IO registers, which keeps the skew under
+# control.  Also, the QPI flash is weird -- it runs at up to 133 MHz but still
+# does the standard SPI thing: launch on falling edge, latch on rising edge.
+# However above 83 MHz this means the data isn't actually valid on the rising
+# edge, because there's a 6ns output delay!  Luckily we can just pretend the
+# whole thing is synchronous on the falling edge, launch and latch there, and
+# it happens to work out fine.
 
 # W25Q128JV timing parameters:
 
@@ -76,55 +78,29 @@ derive_clock_uncertainty
 
 # New data is available 6ns (tCLQV) after falling flash_SCK, and old data is
 # stable for 1.5ns (tCLQX) after falling flash_SCK.  i.e. for a 96MHz
-# (10.42ns) clock, the FPGA has 4.42ns + 1.5ns = 5.92ns to sample data.
+# (10.42ns) clock, the FPGA has 4.42ns setup + 1.5ns hold = 5.92ns to sample
+# data.  In practice this works without any constraints apart from the fast IO
+# register packing.
 
-# For now we just run the flash at 48 MHz; eventually we'll generate flash_SCK
-# using a DDR output and run at 96 MHz, but for now things are a lot easier.
+# Originally we just ran the flash at 48 MHz, but now we generate flash_SCK
+# using a DDR output and run at 96 MHz, but otherwise everything is the same:
+# we invert the clock and just do everything on the falling edge, which lets
+# us comply with the setup and hold for both /CS and IO*.
 
-# For now we just want to make sure there's a relatively consistent
-# clock-to-output delay across flash_*.  If we say the remote chip needs 3ns
-# setup and 5ns hold, we can have a 5.42 ns clock to output time, which
-# Quartus should be able to manage.
-
-# TODO these were -max 3 / -min -5, but that failed timing (although worked in practice)
-
-# flash_SCK (10.42ns) is toggled from $clock_96
+# flash_SCK (10.42ns) is generated from $clock_96 by an altddio_out
 set_output_delay -clock $clock_96 -max 0 [get_ports flash_SCK]
 set_output_delay -clock $clock_96 -min 0 [get_ports flash_SCK]
 
-# flash_nCE and flash_IO* are updated in sync with the falling edge of flash_SCK
+# TODO figure out what's going on here; removing this gives me a timing
+# violation from the clock node itself to flash_SCK, which I've never seen
+# before.
+set_false_path -from $clock_96 -to flash_SCK
+
 set_output_delay -clock $clock_96 -max 0 [get_ports flash_nCE]
 set_output_delay -clock $clock_96 -min 0 [get_ports flash_nCE]
 set_output_delay -clock $clock_96 -max 0 [get_ports flash_IO*]
 set_output_delay -clock $clock_96 -min 0 [get_ports flash_IO*]
 
-# flash_SCK will go low max 5.42ns after clock_96, and the flash will update
-# IO* max 6ns after that, so the clock-to-output time for us relative to the
-# next clock cycle is 5.42+6-10.42=1ns + board delays.  The flash will hold
-# IO* for 1.25ns after its next clock.
-
-#--- t=0: clock_96 edge, set SCK low ---
-# t=3-5.42ns: flash_SCK low
-#--- t=10.42ns: clock_96 edge, set SCK high ---
-# t=9-11.42ns: flash_IO* driven by flash
-# t=13.42-15.84ns: flash_SCK high
-#--- t=20.83ns: clock_96 edge, set SCK low ---
-# t=23.83-26.25ns: flash_SCK low
-# t=25.08-27.5ns: flash_IO* hold time expires
-#--- t=31.25ns: clock_96 edge, set SCK high ---
-
-# So the FPGA can latch input data any time between 11.42-25.08ns, i.e.
-# from its perspective the flash has a hold time of 4.25ns and a clock
-# to output time of 1.02ns.  This would normally not make sense, but we're
-# splitting the transaction over two clock cycles.  We're just going to
-# be super conservative here and say no hold and 8ns clock-to-output,
-# so if the signal is super delayed we still pick it up.
-
-# Setting -min 2 / -max 8 results in the fitter adding 1.5-2ns of delay
-# between flash_IO* and qpi_flash:flash|data_out, i.e. the fitter is delaying
-# the input to give us a better hold time.
-
-# TODO figure out why this all works with just zeros everywhere!
 set_input_delay -clock $clock_96 -min 0 [get_ports flash_IO*]
 set_input_delay -clock $clock_96 -max 0 [get_ports flash_IO*]
 

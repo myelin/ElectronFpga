@@ -14,6 +14,7 @@
 
 
 `timescale 1ns/100ps
+
 `include "qpi_flash.v"
 
 `define assert(condition, message) if(!(condition)) begin $display("ASSERTION FAILED: %s", message); $finish(1); end
@@ -21,6 +22,28 @@
 // 1 to test for 96 MHz operation, 0 for 48 MHz
 `define FAST_MODE 1
 
+// Model of Max 10 DDR output
+module altddio_out(
+  input datain_h,
+  input datain_l,
+  input outclock,
+  output wire dataout
+);
+
+  parameter width = 1;
+
+  reg data_h, data_l;
+
+  always @(posedge outclock) begin
+    data_h <= datain_h;
+    data_l <= datain_l;
+  end
+
+  assign dataout = outclock ? data_h : data_l;
+
+endmodule
+
+// Test module
 module qpi_flash_test;
 
   // test clock
@@ -90,7 +113,13 @@ module qpi_flash_test;
     .flash_IO2(flash_IO2),
     .flash_IO3(flash_IO3)
   );
-  defparam dut.EXTRA_DUMMY_CLOCKS = `FAST_MODE ? 4 : 0;
+  defparam dut.FAST_MODE = `FAST_MODE;
+
+  task check_flash_deselected;
+    begin
+      #1 `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    end
+  endtask
 
   // Expect the controller to output a given byte on flash_IO on the next two clocks, or fail
   task expectout;
@@ -106,7 +135,7 @@ module qpi_flash_test;
       in_byte[3:0] = {flash_IO3, flash_IO2, flash_IO1, flash_IO0};
       @(negedge flash_SCK);
       $display("Controller output %02x (expected %02x)", in_byte, expected_byte);
-      if (in_byte != expected_byte) begin
+      if (in_byte !== expected_byte) begin
         $display("FAIL");
         $finish;
       end
@@ -116,8 +145,11 @@ module qpi_flash_test;
   task expectdummyclocks;
     begin
       if (`FAST_MODE) begin
+        $display("expect dummy clocks now");
         expectout(8'h0);
         expectout(8'h0);
+      end else begin
+        $display("in slow mode; dummy clocks all done now");
       end
     end
   endtask
@@ -161,7 +193,16 @@ module qpi_flash_test;
   // clock driver
   initial begin
     clk = 1'b0;
-    forever #9 clk = ~clk;
+    forever #(1000.0/96/2) clk = ~clk;
+  end
+
+  // CE pulse measurer
+  integer ce_dropped_at = 0;
+  always @(negedge flash_nCE) begin
+    ce_dropped_at = $time;
+  end
+  always @(posedge flash_nCE) begin
+    $display("/CE pulse width: %0d ns", $time - ce_dropped_at);
   end
 
   always @(posedge dut.ready) begin
@@ -182,18 +223,20 @@ module qpi_flash_test;
   end
 
   always @(posedge flash_SCK) begin
-    if (dut.qpi_mode == 1 && flash_nCE == 0) begin
-      spi_shift = {spi_shift[`SHIFT_HIGH-4:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
-      $display("rising QPI edge with output nybble %x", {flash_IO3, flash_IO2, flash_IO1, flash_IO0});
-      shift_count = shift_count + 4;
-    end else begin
-      spi_shift = {spi_shift[`SHIFT_HIGH-1:0], flash_IO0};
-      // $display("rising SPI edge with MOSI %x", flash_IO0);
-      shift_count = shift_count + 1;
-    end
-    if (shift_count == 8) begin
-      $display("-> output byte %x", spi_shift[7:0]);
-      shift_count = 0;
+    if (flash_nCE == 0) begin
+      if (dut.qpi_mode == 1) begin
+        spi_shift = {spi_shift[`SHIFT_HIGH-4:0], flash_IO3, flash_IO2, flash_IO1, flash_IO0};
+        $display("rising QPI edge with output nybble %x", {flash_IO3, flash_IO2, flash_IO1, flash_IO0});
+        shift_count = shift_count + 4;
+      end else begin
+        spi_shift = {spi_shift[`SHIFT_HIGH-1:0], flash_IO0};
+        // $display("rising SPI edge with MOSI %x", flash_IO0);
+        shift_count = shift_count + 1;
+      end
+      if (shift_count == 8) begin
+        $display("-> output byte %x", spi_shift[7:0]);
+        shift_count = 0;
+      end
     end
   end
 
@@ -221,16 +264,18 @@ module qpi_flash_test;
     @(negedge flash_nCE);
     $display("* SPI FF to disable continuous read");
     expectoutspi(8'hFF);
-    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    check_flash_deselected();
+
     $display("* QPI FF to disable QPI");
     @(negedge flash_nCE);
     expectout(8'hFF);
-    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
-    // @(posedge ready); $finish;
+    check_flash_deselected();
+
     $display("* SPI 38 to re-enter QPI");
     @(negedge flash_nCE);
     expectoutspi(8'h38);
-    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    check_flash_deselected();
+
     if (`FAST_MODE) begin
       $display("* QPI C0 20 to set 6 dummy clocks (for 96 MHz operation)");
     end else begin
@@ -239,7 +284,8 @@ module qpi_flash_test;
     @(negedge flash_nCE);
     expectout(8'hC0);
     expectout(`FAST_MODE ? 8'h20 : 8'h00);
-    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    check_flash_deselected();
+
     $display("* QPI: set up continuous read");
     @(negedge flash_nCE);
     expectout(8'hEB);
@@ -249,7 +295,8 @@ module qpi_flash_test;
     expectout(8'h20);
     expectdummyclocks();
     inbyte(8'hff);
-    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    check_flash_deselected();
+
     $display("* QPI: test continuous read");
     @(negedge flash_nCE);
     expectout(8'h00);
@@ -258,13 +305,13 @@ module qpi_flash_test;
     expectout(8'h20);
     expectdummyclocks();
     inbyte(8'hff);
-    `assert(flash_nCE == 1'b1, "FAIL: flash still selected at end of transaction");
+    check_flash_deselected();
 
     // Expect `ready` to go high shortly after the reset transactions
     repeat(4) @(posedge clk);
     `assert(ready == 1'b1, "FAIL: device not ready");
 
-    $display("\n\nReset successful; trying a read (0 alignment)");
+    $display("\nReset successful; trying a read (0 alignment)");
     addr = 24'h123454;
     read = 1;
     @(posedge clk);
